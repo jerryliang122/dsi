@@ -18,19 +18,17 @@ def decode_image(src):
     :param src: 图片编码
     :return: str 保存到本地的文件名
     """
-    # 1、信息提取
-    result = re.search("data:image/(?P<ext>.*?);base64,(?P<data>.*)", src, re.DOTALL)
-    if result:
-        ext = result.groupdict().get("ext")
-        data = result.groupdict().get("data")
-
-    else:
+    if not (
+        result := re.search(
+            "data:image/(?P<ext>.*?);base64,(?P<data>.*)", src, re.DOTALL
+        )
+    ):
         raise Exception("Do not parse!")
 
-    # 2、base64解码
-    img = base64.urlsafe_b64decode(data)
+    ext = result.groupdict().get("ext")
+    data = result.groupdict().get("data")
 
-    return img
+    return base64.urlsafe_b64decode(data)
     # 3、二进制文件保存
     # with open(save_path, "wb") as f:
     #     f.write(img)
@@ -92,7 +90,7 @@ def text2img_example():
         img = base64.urlsafe_b64decode(image)
         # gn_img = decode_image(image)
         # print(gn_img)
-        gn_img_save_path = str(idx) + ".jpg"
+        gn_img_save_path = f"{str(idx)}.jpg"
         with open(gn_img_save_path, "wb") as f:
             f.write(img)
 

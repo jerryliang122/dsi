@@ -140,12 +140,23 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, schedulers, scaler, loade
                 100. * batch_idx / len(train_loader)))
                 logger.info([x.item() for x in losses] + [global_step, lr])
 
-                scalar_dict = {"loss/g/total": loss_gen_all, "loss/d/total": loss_disc_all, "learning_rate": lr, "grad_norm_g": grad_norm_g}
-                scalar_dict.update({"loss/g/fm": loss_fm, "loss/g/mel": loss_mel, "loss/g/dur": loss_dur, "loss/g/kl": loss_kl})
-
-                scalar_dict.update({"loss/g/{}".format(i): v for i, v in enumerate(losses_gen)})
-                scalar_dict.update({"loss/d_r/{}".format(i): v for i, v in enumerate(losses_disc_r)})
-                scalar_dict.update({"loss/d_g/{}".format(i): v for i, v in enumerate(losses_disc_g)})
+                scalar_dict = (
+                    {
+                        "loss/g/total": loss_gen_all,
+                        "loss/d/total": loss_disc_all,
+                        "learning_rate": lr,
+                        "grad_norm_g": grad_norm_g,
+                    }
+                    | {
+                        "loss/g/fm": loss_fm,
+                        "loss/g/mel": loss_mel,
+                        "loss/g/dur": loss_dur,
+                        "loss/g/kl": loss_kl,
+                    }
+                    | {f"loss/g/{i}": v for i, v in enumerate(losses_gen)}
+                    | {f"loss/d_r/{i}": v for i, v in enumerate(losses_disc_r)}
+                    | {f"loss/d_g/{i}": v for i, v in enumerate(losses_disc_g)}
+                )
                 image_dict = {
                     "slice/mel_org": utils.plot_spectrogram_to_numpy(y_mel[0].data.cpu().numpy()),
                     "slice/mel_gen": utils.plot_spectrogram_to_numpy(y_hat_mel[0].data.cpu().numpy()),
@@ -161,18 +172,28 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, schedulers, scaler, loade
             if global_step % hps.train.eval_interval == 0:
 
                 evaluate(hps, net_g, eval_loader, writer_eval)
-                
+
                 utils.save_checkpoint(net_g, None, hps.train.learning_rate, epoch,
                                     os.path.join(hps.model_dir, "G_latest.pth"))
-                
+
                 utils.save_checkpoint(net_d, None, hps.train.learning_rate, epoch,
                                     os.path.join(hps.model_dir, "D_latest.pth"))
 
             if hps.preserved > 0:
-                utils.save_checkpoint(net_g, None, hps.train.learning_rate, epoch,
-                                        os.path.join(hps.model_dir, "G_{}.pth".format(global_step)))
-                utils.save_checkpoint(net_d, None, hps.train.learning_rate, epoch,
-                                        os.path.join(hps.model_dir, "D_{}.pth".format(global_step)))
+                utils.save_checkpoint(
+                    net_g,
+                    None,
+                    hps.train.learning_rate,
+                    epoch,
+                    os.path.join(hps.model_dir, f"G_{global_step}.pth"),
+                )
+                utils.save_checkpoint(
+                    net_d,
+                    None,
+                    hps.train.learning_rate,
+                    epoch,
+                    os.path.join(hps.model_dir, f"D_{global_step}.pth"),
+                )
                 old_g = utils.oldest_checkpoint_path(hps.model_dir, "G_[0-9]*.pth",
                                                     preserved=hps.preserved)  # Preserve 4 (default) historical checkpoints.
                 old_d = utils.oldest_checkpoint_path(hps.model_dir, "D_[0-9]*.pth", preserved=hps.preserved)
@@ -188,46 +209,46 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, schedulers, scaler, loade
             print("Maximum epoch reached, closing training...")
             exit()
     if rank == 0:
-        logger.info('====> Epoch: {}'.format(epoch))
+        logger.info(f'====> Epoch: {epoch}')
 
 def evaluate(hps, generator, eval_loader, writer_eval):
     generator.eval()
     with torch.no_grad():
-      for batch_idx, (x, x_lengths, spec, spec_lengths, y, y_lengths, speakers) in enumerate(eval_loader):
-        x, x_lengths = x.cuda(0), x_lengths.cuda(0)
-        spec, spec_lengths = spec.cuda(0), spec_lengths.cuda(0)
-        y, y_lengths = y.cuda(0), y_lengths.cuda(0)
-        speakers = speakers.cuda(0)
+        for x, x_lengths, spec, spec_lengths, y, y_lengths, speakers in eval_loader:
+            x, x_lengths = x.cuda(0), x_lengths.cuda(0)
+            spec, spec_lengths = spec.cuda(0), spec_lengths.cuda(0)
+            y, y_lengths = y.cuda(0), y_lengths.cuda(0)
+            speakers = speakers.cuda(0)
 
-        # remove else
-        x = x[:1]
-        x_lengths = x_lengths[:1]
-        spec = spec[:1]
-        spec_lengths = spec_lengths[:1]
-        y = y[:1]
-        y_lengths = y_lengths[:1]
-        speakers = speakers[:1]
-        break
-      y_hat, attn, mask, *_ = generator.module.infer(x, x_lengths, speakers, max_len=1000)
-      y_hat_lengths = mask.sum([1,2]).long() * hps.data.hop_length
+            # remove else
+            x = x[:1]
+            x_lengths = x_lengths[:1]
+            spec = spec[:1]
+            spec_lengths = spec_lengths[:1]
+            y = y[:1]
+            y_lengths = y_lengths[:1]
+            speakers = speakers[:1]
+            break
+        y_hat, attn, mask, *_ = generator.module.infer(x, x_lengths, speakers, max_len=1000)
+        y_hat_lengths = mask.sum([1,2]).long() * hps.data.hop_length
 
-      mel = spec_to_mel_torch(
-        spec,
-        hps.data.filter_length,
-        hps.data.n_mel_channels,
-        hps.data.sampling_rate,
-        hps.data.mel_fmin,
-        hps.data.mel_fmax)
-      y_hat_mel = mel_spectrogram_torch(
-        y_hat.squeeze(1).float(),
-        hps.data.filter_length,
-        hps.data.n_mel_channels,
-        hps.data.sampling_rate,
-        hps.data.hop_length,
-        hps.data.win_length,
-        hps.data.mel_fmin,
-        hps.data.mel_fmax
-      )
+        mel = spec_to_mel_torch(
+          spec,
+          hps.data.filter_length,
+          hps.data.n_mel_channels,
+          hps.data.sampling_rate,
+          hps.data.mel_fmin,
+          hps.data.mel_fmax)
+        y_hat_mel = mel_spectrogram_torch(
+          y_hat.squeeze(1).float(),
+          hps.data.filter_length,
+          hps.data.n_mel_channels,
+          hps.data.sampling_rate,
+          hps.data.hop_length,
+          hps.data.win_length,
+          hps.data.mel_fmin,
+          hps.data.mel_fmax
+        )
     image_dict = {
       "gen/mel": utils.plot_spectrogram_to_numpy(y_hat_mel[0].cpu().numpy())
     }
@@ -235,8 +256,8 @@ def evaluate(hps, generator, eval_loader, writer_eval):
       "gen/audio": y_hat[0,:,:y_hat_lengths[0]]
     }
     if global_step == 0:
-      image_dict.update({"gt/mel": utils.plot_spectrogram_to_numpy(mel[0].cpu().numpy())})
-      audio_dict.update({"gt/audio": y[0,:,:y_lengths[0]]})
+        image_dict["gt/mel"] = utils.plot_spectrogram_to_numpy(mel[0].cpu().numpy())
+        audio_dict["gt/audio"] = y[0,:,:y_lengths[0]]
 
     utils.summarize(
       writer=writer_eval,
